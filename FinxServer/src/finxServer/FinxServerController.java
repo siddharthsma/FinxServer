@@ -14,7 +14,7 @@ public class FinxServerController {
 	public static void main(String[] args) {
 	
 		//sockets
-		set_ServerSocket(9396);
+		set_ServerSocket(9390);
 		listen_for_connections();
 		
 	}
