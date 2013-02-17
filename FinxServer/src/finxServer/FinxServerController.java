@@ -3,26 +3,31 @@ package finxServer;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.HashMap;
-import java.util.UUID;
 
 public class FinxServerController {
 
 	
-	private static ServerSocket finxServerSocket = null;
-	private static Socket finxSocket;
+	private static ServerSocket finxProtocolsServerSocket = null;
+	private static ServerSocket finxFilesServerSocket = null;
+	private static Socket finxProtocolsSocket;
+	private static Socket finxFilesSocket;
 	private static HashMap<String,FinxServerThread> clients_map = new HashMap<String, FinxServerThread>();
+	public static final int PROTOCOLS_PORT = 9390;
+	public static final int FILES_PORT = 9391;
+	
 	public static void main(String[] args) {
 	
 		//sockets
-		set_ServerSocket(9390);
+		set_ServerSocket();
 		listen_for_connections();
 		
 	}
 
 	
-	public static void set_ServerSocket(int port) {
+	public static void set_ServerSocket() {
 		try {
-			finxServerSocket = new ServerSocket(port);
+			finxProtocolsServerSocket = new ServerSocket(PROTOCOLS_PORT);
+			finxFilesServerSocket = new ServerSocket(FILES_PORT);
 		} catch(Exception e) {
 			System.out.println(e);
 		}
@@ -33,10 +38,11 @@ public class FinxServerController {
 			int clientNumber = 0;
 			String stringedClientNumber;
 			while(true) {
-			finxSocket = finxServerSocket.accept();
-			stringedClientNumber = Integer.toString(clientNumber);
-			clients_map.put(stringedClientNumber, new FinxServerThread(finxSocket,stringedClientNumber));
-			clientNumber++;
+				finxProtocolsSocket = finxProtocolsServerSocket.accept();
+				finxFilesSocket = finxFilesServerSocket.accept();
+				stringedClientNumber = Integer.toString(clientNumber);
+				clients_map.put(stringedClientNumber, new FinxServerThread(finxProtocolsSocket, finxFilesSocket,stringedClientNumber));
+				clientNumber++;
 			}
 		} catch (Exception e) {
 			System.out.println(e);

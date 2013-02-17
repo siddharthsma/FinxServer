@@ -3,40 +3,45 @@ package finxServer;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.io.PrintStream;
-import java.net.ServerSocket;
 import java.net.Socket;
 
 public class FinxServerThread extends Thread {
 
-
-	private String finx_server_folder_path;
-	
 	private InputStreamReader inProtocolReader;
 	private BufferedReader inputProtocol;
 	private PrintStream outputProtocol;
-	
+
 	private String stringMAC;
 	private String userIdentity;
-	private Socket finxSocket;
-	private int fileWorkerCount = 0;
+	private Socket finxProtocolsSocket;
+	private Socket finxFilesSocket;
 
 	// for the time being this is hardcoded - later it will be user specific
 	private String serverLogPath = "Assets/Serverlog.txt";
+	private String serverPath = "/Users/sameerambegaonkar/Desktop/FinxServerFolder/";
 
 	private File myServerLog;
 	private FileReader fileReader;
 	private BufferedReader buffFileReader;
 
-	public FinxServerThread(Socket finxSocket, String userIdentity) {
+	public static final int BUFFER_SIZE = 100;  
+
+	public FinxServerThread(Socket finxProtocolsSocket, Socket finxFilesSocket, String userIdentity) {
 		// setup - assuming the FinxFolder has already been created on the Server
-		this.finxSocket = finxSocket;
+		this.finxProtocolsSocket = finxProtocolsSocket;
+		this.finxFilesSocket = finxFilesSocket;
+		System.out.println(finxProtocolsSocket.isConnected());
+		System.out.println(finxFilesSocket.isConnected());
 		this.userIdentity = userIdentity;
-		setInputProtocolStream(finxSocket);
-		setOutputProtocolStream(finxSocket);
+		setInputProtocolStream();
+		setOutputProtocolStream();
 		start();
 	}
 
@@ -47,8 +52,11 @@ public class FinxServerThread extends Thread {
 		then make the MAC address the new key in the clients_map hash so we know who the
 		thread belongs to */
 		authenticate();
+		testing();
 		FinxServerController.replace_clients_map_Key(this, userIdentity, stringMAC);
-		waitForCommands();
+		while(true) {
+			waitForCommands();
+		}
 	}
 
 	public void waitForCommands() {
@@ -58,86 +66,76 @@ public class FinxServerThread extends Thread {
 		 */
 		String command = null;
 		try {
-			while ((command = inputProtocol.readLine()) != null) {
-				System.out.println("The command issued is: " + command);
-				
-				if (command.equals("lastpushtime")) {
-					sendLastPushTime();
-				}
-				else if (command.startsWith("push")) {
-					String[] info = command.split(":");
-					openServerSocket();
-					try {
-						receiveFile(info[1]);
-					} catch (IOException e) {
-						e.printStackTrace();
-					}
-				}
-				else {
-					System.out.println("Unrecognised command");
-				}
-			}	
-		} catch (IOException e) {
-			e.printStackTrace();
+			command = inputProtocol.readLine();
+		} catch (IOException e1) {
+			e1.printStackTrace();
+		}
+		System.out.println("The command issued is: " + command);
+
+		if (command.equals("lastpushtime")) {
+			sendLastPushTime();
+		}
+		else if (command.startsWith("push")) {
+			String[] info = command.split("#");
+			try {
+				//receiveFile(info[1], Long.valueOf((info[2])) );
+				receiveFile(info[1]);
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+		}
+		else {
+
 		}
 	}
 
-	public void receiveFile(String fileName) throws IOException {
-	/*	int filesize=6022386; // filesize temporary hardcoded
+	public void receiveFile(String fileName) throws Exception {
 
-	    long start = System.currentTimeMillis();
-	    int bytesRead;
-	    int current = 0;
+		ObjectOutputStream oos = new ObjectOutputStream(finxFilesSocket.getOutputStream());  
+		ObjectInputStream ois = new ObjectInputStream(finxFilesSocket.getInputStream());  
+		FileOutputStream fos = null;  
+		byte [] buffer = new byte[BUFFER_SIZE];  
 
-	    // receive file
-	    byte [] mybytearray  = new byte [filesize];
-	    InputStream is = finxSocket.getInputStream();
-	    FileOutputStream fos = new FileOutputStream(fileName);
-	    BufferedOutputStream bos = new BufferedOutputStream(fos);
-	    bytesRead = is.read(mybytearray,0,mybytearray.length);
-	    current = bytesRead;
+		// 1. Read file name.  
+		Object o = ois.readObject();  
 
-	    do {
-	       bytesRead =
-	          is.read(mybytearray, current, (mybytearray.length-current));
-	       if(bytesRead >= 0) current += bytesRead;
-	    } while(bytesRead > -1);
+		if (o instanceof String) {  
+			fos = new FileOutputStream(serverPath + o.toString());  
+		} else {  
+			throwException("Something is wrong");  
+		}  
 
-	    bos.write(mybytearray, 0 , current);
-	    bos.flush();
-	    long end = System.currentTimeMillis();
-	    System.out.println(end-start);
-	    bos.close();*/
-	    //finxSocket.close();
-	  }
+		// 2. Read file to the end.  
+		Integer bytesRead = 0;  
+
+		do {  
+			o = ois.readObject();  
+
+			if (!(o instanceof Integer)) {  
+				throwException("Something is wrong");  
+			}  
+
+			bytesRead = (Integer)o;  
+
+			o = ois.readObject();  
+
+			if (!(o instanceof byte[])) {  
+				throwException("Something is wrong");  
+			}  
+
+			buffer = (byte[])o;  
+
+			// 3. Write data to output file.  
+			fos.write(buffer, 0, bytesRead);  
+		} while (bytesRead == BUFFER_SIZE);  
+
+		fos.close();  
+	}
 
 	public static void throwException(String message) throws Exception {  
 		throw new Exception(message);  
 	}  
-	
-	public void openServerSocket() {
-		fileWorkerCount++;
-		int port = 9390 + fileWorkerCount;
-		
-		try {
-			ServerSocket fileWorkerSocket = new ServerSocket(port);
-			Socket workerSocket = fileWorkerSocket.accept();
-			
-			// now check that the right client has connected to the Socket
-			if (!workerSocket.getInetAddress().equals(finxSocket.getInetAddress())) {
-				// wrong client has connected - so terminate Socket and make port available
-				workerSocket.setReuseAddress(true);
-				workerSocket.close();
-				try {
-					sleep(10);
-				} catch (InterruptedException e) {
-					e.printStackTrace();
-				}
-			}
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
-	}
+
 
 	public void sendLastPushTime() {
 		String stringedPushTime = "noTime";
@@ -171,23 +169,23 @@ public class FinxServerThread extends Thread {
 		}
 	}
 
-	public void setInputProtocolStream(Socket finxSocket) {
+	public void setInputProtocolStream() {
 		try {
-			inProtocolReader = new InputStreamReader(finxSocket.getInputStream());
+			inProtocolReader = new InputStreamReader(finxProtocolsSocket.getInputStream());
 			inputProtocol = new BufferedReader(inProtocolReader);
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
 	}
 
-	public void setOutputProtocolStream(Socket finxSocket) {
+	public void setOutputProtocolStream() {
 		try {
-			outputProtocol = new PrintStream(finxSocket.getOutputStream());
+			outputProtocol = new PrintStream(finxProtocolsSocket.getOutputStream(), true /* autoflush */);
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
 	}
-	
+
 
 	public void authenticate() {
 		try {
