@@ -2,6 +2,7 @@ package finxServer;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.FileReader;
@@ -11,26 +12,38 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.PrintStream;
 import java.net.Socket;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Iterator;
 
 public class FinxServerThread extends Thread {
 
 	private InputStreamReader inProtocolReader;
-	private BufferedReader inputProtocol;
-	private PrintStream outputProtocol;
+	public BufferedReader inputProtocol;
+	public PrintStream outputProtocol;
 
 	private String stringMAC;
 	private String userIdentity;
 	private Socket finxProtocolsSocket;
 	private Socket finxFilesSocket;
+	private ClientCommandWatcher clientCommands;
 
 	// for the time being this is hardcoded - later it will be user specific
 	private String serverLogPath = "Assets/Serverlog.txt";
 	private String serverPath = "/Users/sameerambegaonkar/Desktop/FinxServerFolder/";
+	private Path FinxServerFolderPath;
 
 	private File myServerLog;
 	private FileReader fileReader;
 	private BufferedReader buffFileReader;
-
+	
+	// Hashes that store
+	public HashMap<String, File> fetched_map = new HashMap<String, File>();
+	public HashMap<String, File> pushed_map = new HashMap<String, File>();
+	
 	public static final int BUFFER_SIZE = 100;  
 
 	public FinxServerThread(Socket finxProtocolsSocket, Socket finxFilesSocket, String userIdentity) {
@@ -53,54 +66,63 @@ public class FinxServerThread extends Thread {
 		thread belongs to */
 		authenticate();
 		testing();
+		setPath(serverPath);
+		walkFileTree();
 		FinxServerController.replace_clients_map_Key(this, userIdentity, stringMAC);
-		while(true) {
-			waitForCommands();
-		}
-	}
-
-	public void waitForCommands() {
-		/* The idea is that the Server is Passive, which means that it will wait
-		 * for commands to be sent by the Client via protocol messages and then react
-		 * accordingly.
-		 */
-		String command = null;
 		try {
-			command = inputProtocol.readLine();
-		} catch (IOException e1) {
-			e1.printStackTrace();
+			FinxServerController.add_folder_watcher(serverPath, stringMAC);
+		} catch (Exception e) {
+			e.printStackTrace();
 		}
-		System.out.println("The command issued is: " + command);
-
-		if (command.equals("lastpushtime")) {
-			sendLastPushTime();
-		}
-		else if (command.startsWith("push")) {
-			String[] info = command.split("#");
-			try {
-				//receiveFile(info[1], Long.valueOf((info[2])) );
-				receiveFile(info[1]);
-			} catch (Exception e) {
-				e.printStackTrace();
-			}
-		}
-		else {
-
-		}
+		clientCommands = new ClientCommandWatcher(this);
+		sendFetchRequests();
 	}
 
-	public void receiveFile(String fileName) throws Exception {
+	public void walkFileTree() {
+		try {
+			Files.walkFileTree(FinxServerFolderPath, new FileTreeWalker(this));
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+	
+	public void pushToClient(String relFilePath) {
+		try {
+			String[] pathSplit = relFilePath.split("/");
+			String fileName = pathSplit[pathSplit.length-1];
+			sendFile(fetched_map.get(fileName).getPath());
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+	
+	public void receiveFile(String relFilePath) throws Exception {
 
-		ObjectOutputStream oos = new ObjectOutputStream(finxFilesSocket.getOutputStream());  
-		ObjectInputStream ois = new ObjectInputStream(finxFilesSocket.getInputStream());  
+		// Set up Input Object Stream on File transfer socket 
+		ObjectInputStream ois = new ObjectInputStream(finxFilesSocket.getInputStream()); 
+		
+		// Set up the FileOutput Stream and byte array buffer
 		FileOutputStream fos = null;  
 		byte [] buffer = new byte[BUFFER_SIZE];  
 
+		// Create directories indicated in the relFilePath
+		String[] directories = relFilePath.split("/");
+		String relDirPath = "";
+		for (int i=0; i < directories.length - 1; i++) {
+			if (i==0) {
+				relDirPath = directories[i];
+			} else {
+				relDirPath += "/" + directories[i];
+			}
+		}
+		File theFile = new File(serverPath + relDirPath);
+		theFile.mkdirs();
+		
 		// 1. Read file name.  
 		Object o = ois.readObject();  
 
 		if (o instanceof String) {  
-			fos = new FileOutputStream(serverPath + o.toString());  
+			fos = new FileOutputStream(serverPath + relFilePath);  
 		} else {  
 			throwException("Something is wrong");  
 		}  
@@ -128,10 +150,48 @@ public class FinxServerThread extends Thread {
 			// 3. Write data to output file.  
 			fos.write(buffer, 0, bytesRead);  
 		} while (bytesRead == BUFFER_SIZE);  
-
+		
 		fos.close();  
 	}
+	
+	public void sendFetchRequests() {
+		/* Actually at this point we would want to read from the server log and 
+		 * determine what needs to be sent to the Client for the fetching operation
+		 */
+		Iterator<String> fetchIterator = fetched_map.keySet().iterator();
+		while (fetchIterator.hasNext()) {
+	        /* Send the protocol message */
+			File myFile = fetched_map.get(fetchIterator.next());
+			String[] filePathSplit = myFile.getPath().split("FinxServerFolder/");
+			outputProtocol.println("fetchrequest#" + filePathSplit[1] );
+		}
+	}
+	
+	public void sendFetchRequest(String absolutePath) {
+		String[] filePathSplit = absolutePath.split("FinxServerFolder/");
+		outputProtocol.println("fetchrequest#" + filePathSplit[1] );
+	}
 
+	public void sendFile(String myFilePath) throws IOException {   
+
+		File myFile = new File(myFilePath);  
+		
+		//Set Output Object Streams on the file transfer socket 
+		ObjectOutputStream oos = new ObjectOutputStream(finxFilesSocket.getOutputStream());  
+
+		// Write the name of the file
+		oos.writeObject(myFile.getName());  
+
+		// Write the rest of the file
+		FileInputStream fis = new FileInputStream(myFile);  
+		byte [] buffer = new byte[BUFFER_SIZE];  
+		Integer bytesRead = 0;  
+
+		while ((bytesRead = fis.read(buffer)) > 0) {  
+			oos.writeObject(bytesRead);  
+			oos.writeObject(Arrays.copyOf(buffer, buffer.length));  
+		}   
+	}
 	public static void throwException(String message) throws Exception {  
 		throw new Exception(message);  
 	}  
@@ -197,10 +257,13 @@ public class FinxServerThread extends Thread {
 		// for the time being just authenticate any UUID
 		outputProtocol.println("Authenticated");
 	}
+	
+	public void setPath(String Path) {
+		FinxServerFolderPath = Paths.get(Path);
+	}
 
 	public void testing() {
 		FinxServerController.print_clients_map_Keys();
 	}
-
 
 }

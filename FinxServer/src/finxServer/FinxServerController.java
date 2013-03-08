@@ -4,6 +4,8 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.HashMap;
 
+import net.contentobjects.jnotify.JNotify;
+
 public class FinxServerController {
 
 	
@@ -23,7 +25,6 @@ public class FinxServerController {
 		
 	}
 
-	
 	public static void set_ServerSocket() {
 		try {
 			finxProtocolsServerSocket = new ServerSocket(PROTOCOLS_PORT);
@@ -52,6 +53,10 @@ public class FinxServerController {
 	public static void replace_clients_map_Key(FinxServerThread itself, String oldKey, String newKey) {
 		clients_map.remove(oldKey);
 		clients_map.put(newKey, itself);
+	}
+	
+	public static void add_folder_watcher(String folderPath, String MACaddr) throws Exception{
+		new FolderWatcherThread(folderPath, clients_map.get(MACaddr));
 	}
 	
 	// for testing purposes
